@@ -1,4 +1,6 @@
-﻿Shader "Critias/Nature/SpeedTree Bilboard Batch" 
+﻿// Upgrade NOTE: replaced 'mul(UNITY_MATRIX_MVP,*)' with 'UnityObjectToClipPos(*)'
+
+Shader "Critias/Nature/SpeedTree Bilboard Batch" 
 {
 	Properties {
 		_Color ("Color", Color) = (1,1,1,1)
@@ -11,10 +13,11 @@
 		Tags
 		{ 
 			"IgnoreProjector" = "True" 
-			"Queue" = "Geometry" 
+			// "Queue" = "Geometry" 
+			"Queue" = "AlphaTest"
 			"RenderType" = "TransparentCutout" 
 
-			// "DisableBatching" = "True"
+			"DisableBatching" = "True"
 		}
 		
 		LOD 200
@@ -22,7 +25,9 @@
 
 		CGPROGRAM						
 
-		#pragma surface surf Standard vertex:BatchedTreeVertex nolightmap addshadow
+		// #pragma surface surf Standard vertex:BatchedTreeVertex nolightmap addshadow
+		#pragma surface surf Standard vertex:BatchedTreeVertex nolightmap noshadow
+			
 		#pragma target 3.0
 
 		sampler2D _MainTex;
@@ -46,6 +51,8 @@
 			half4 color			: COLOR;
 		};
 
+		// Make sure this matches the value in the 'TreeSystem'
+		#define LOD_TRANZITION_THRESHOLD 3.0
 		float _TreeSystemDistance;
 
 		fixed4 _Color;
@@ -61,76 +68,84 @@
 
 		void BatchedTreeVertex(inout appdata_t IN, out Input OUT)
 		{
-			UNITY_INITIALIZE_OUTPUT(Input, OUT);
-			
-			float x = IN.vertex.x;
-			float y = IN.vertex.y;
-
-			int idx;
-			if (x < 0 && y < 0) idx = 0;
-			else if (x < 0 && y > 0) idx = 3;
-			else if (x > 0 && y < 0) idx = 1;
-			else idx = 2;
-
-			OUT.computedUv = float2(_UVVert_U[0][idx], _UVVert_V[0][idx]);
+			UNITY_INITIALIZE_OUTPUT(Input, OUT);			
 
 			float3 campos = _WorldSpaceCameraPos;
 			float3 pos = IN.texcoord1.xyz;
-
-			// Instance rotation
-			float rot = IN.texcoord1.w;
-
-			// TODO: this batched stuff we'll only test for scale 0-1 no need for dithering here
+						
 			float dist = distance(pos, campos);
 
-			float3 v2 = float3(0, 0, 1);
-			float3 v1 = campos - pos;
+			// if (dist > DISTANCE - THRES)
+			if (dist >= _TreeSystemDistance - LOD_TRANZITION_THRESHOLD)
+			{	
+				if (dist > _TreeSystemDistance)
+				{
+					OUT.transparency = 1.0;
+				}
+				else
+				{
+					OUT.transparency = 1.0 - (_TreeSystemDistance - dist) / LOD_TRANZITION_THRESHOLD;
+				}				
 
-			int angleIdx;
+				float x = IN.vertex.x;
+				float y = IN.vertex.y;
 
-			v1 = normalize(v1);
+				int idx;
+				if (x < 0 && y < 0) idx = 0;
+				else if (x < 0 && y > 0) idx = 3;
+				else if (x > 0 && y < 0) idx = 1;
+				else idx = 2;
 
-			float dotA, detA;
+				OUT.computedUv = float2(_UVVert_U[0][idx], _UVVert_V[0][idx]);
 
-			dotA = v1.x * v2.x + v1.z * v2.z;
-			detA = v1.x * v2.z - v1.z * v2.x;
+				// Instance rotation
+				float rot = IN.texcoord1.w;
 
-			// TODO: add tree instance's rotation too
-			// Map to 0 - 360
-			// float angle = (atan2(det, dot)) + 180.0f + instance rotation
-			float angle = (atan2(detA, dotA)) + UNITY_PI;
+				float3 v2 = float3(0, 0, 1);
+				float3 v1 = campos - pos;
 
-			v2 = float3(0, 1, 0);
-			float F = dot(v1.yz, v2.yz);
+				int angleIdx;
 
-			// TODO: see if we should have here an 'F' value snap or something so that we 
-			// don't tranzition at once into a vertical billboard
-			if (F > .9)
-			{
-				// Make it a horizontal billboard						
-				IN.vertex.xzy = IN.vertex.xyz;
-				OUT.computedUv = float2(_UVHorz_U[idx], _UVHorz_V[idx]);
-			}
-			else
-			{				
-				v2 = v1;
-				v1 = float3(-1, 0, 0);
+				v1 = normalize(v1);
+
+				float dotA, detA;
 
 				dotA = v1.x * v2.x + v1.z * v2.z;
 				detA = v1.x * v2.z - v1.z * v2.x;
 
-				float angle360 = (atan2(detA, dotA) + 3.141592632) + rot;
-				if (angle360 < 0) angle360 = 6.283185264 + angle360;
+				// TODO: add tree instance's rotation too
+				// Map to 0 - 360
+				// float angle = (atan2(det, dot)) + 180.0f + instance rotation
+				float angle = (atan2(detA, dotA)) + UNITY_PI;
 
-				// 1.27 is inverse of 45' in rad
-				angleIdx = fmod(floor((angle360) * 1.273239553 + 0.5), 8);
+				v2 = float3(0, 1, 0);
+				float F = dot(v1.yz, v2.yz);
 
-				OUT.computedUv = float2(_UVVert_U[angleIdx][idx], _UVVert_V[angleIdx][idx]);
-			}
+				// TODO: see if we should have here an 'F' value snap or something so that we 
+				// don't tranzition at once into a vertical billboard
+				if (F > .9)
+				{
+					// Make it a horizontal billboard						
+					IN.vertex.xzy = IN.vertex.xyz;
+					OUT.computedUv = float2(_UVHorz_U[idx], _UVHorz_V[idx]);
+				}
+				else
+				{
+					v2 = v1;
+					v1 = float3(-1, 0, 0);
 
-			// if (dist > DISTANCE - THRES)
-			if (dist >= _TreeSystemDistance)
-			{
+					dotA = v1.x * v2.x + v1.z * v2.z;
+					detA = v1.x * v2.z - v1.z * v2.x;
+
+					float angle360 = (atan2(detA, dotA) + 3.141592632) + rot;
+					if (angle360 < 0) angle360 = 6.283185264 + angle360;
+
+					// 1.27 is inverse of 45' in rad
+					angleIdx = fmod(floor((angle360) * 1.273239553 + 0.5), 8);
+
+					OUT.computedUv = float2(_UVVert_U[angleIdx][idx], _UVVert_V[angleIdx][idx]);
+				}				
+
 				// OUT.transparency = 1.0 - (clamp(DISTANCE - dist, 0.0, THRES) / THRES);
 
 				float2 vert;
@@ -173,10 +188,28 @@
 			fixed4 c = tex2D(_MainTex, IN.computedUv) * _Color;
 			clip(c.a - _Cutoff);
 
+			{
+				const float4x4 thresholdMatrix =
+				{
+					1.0 / 17.0,  9.0 / 17.0,  3.0 / 17.0, 11.0 / 17.0,
+					13.0 / 17.0,  5.0 / 17.0, 15.0 / 17.0,  7.0 / 17.0,
+					4.0 / 17.0, 12.0 / 17.0,  2.0 / 17.0, 10.0 / 17.0,
+					16.0 / 17.0,  8.0 / 17.0, 14.0 / 17.0,  6.0 / 17.0
+				};
+				const float4x4 _RowAccess = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+				float2 pos = IN.screenPos.xy / IN.screenPos.z;
+				pos *= _ScreenParams.xy;
+
+				clip(IN.transparency - thresholdMatrix[fmod(pos.x, 4)] * _RowAccess[fmod(pos.y, 4)]);
+			}
+
 			o.Albedo = c.rgb;
 			o.Alpha = c.a;
 			o.Normal = UnpackNormal(tex2D(_BumpMap, IN.computedUv));
-			
+
+			// Default to 2
+			o.Smoothness = 0;
+			o.Metallic = 0;
 		}
 		ENDCG
 	}

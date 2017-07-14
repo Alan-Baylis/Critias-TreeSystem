@@ -128,6 +128,12 @@ public class TreeColliders : MonoBehaviour
     {
         for (;;)
         {
+            if (!m_WatchedTransform)
+            {
+                yield return new WaitForSeconds(WAIT_TIME);
+                continue;
+            }
+
             m_CameraPosTemp = m_WatchedTransform.position;
 
             float x = m_CameraPosTemp.x - m_LastPosition.x;
@@ -243,7 +249,7 @@ public class TreeColliders : MonoBehaviour
     private GameObject GetColliderForPrototype(int hash)
     {
         TreeSystemPrototypeData data = m_OwnerSystem.m_ManagedPrototypesIndexed[hash];
-
+        
         if(m_Cache.ContainsKey(hash) == false)
         {
             // If we don't contain the key create and add it

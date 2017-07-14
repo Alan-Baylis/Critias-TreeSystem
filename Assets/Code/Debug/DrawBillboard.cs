@@ -66,6 +66,7 @@ public class DrawBillboard : MonoBehaviour
             UV_V[i].w = uv[4 * i + 3].y;
         }
 
+        /*
         Material bl = FindObjectOfType<TreeSystem>().m_ManagedPrototypes[0].m_BillboardMasterMaterial;
 
         m.SetVector("_UVHorz_U", UV_U[0]);
@@ -73,6 +74,7 @@ public class DrawBillboard : MonoBehaviour
 
         m.SetTexture("_MainTex", bl.GetTexture("_MainTex"));
         m.SetTexture("_BumpMap", bl.GetTexture("_BumpMap"));
+        */
     }
 
     public Mesh m_SystemQuad;

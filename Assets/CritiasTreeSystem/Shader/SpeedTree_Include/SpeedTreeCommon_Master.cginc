@@ -27,6 +27,7 @@ struct Input
 	#endif
 	
 	float4 screenPos;
+	half transparency;
 };
 	
 // Define uniforms
@@ -35,7 +36,7 @@ struct Input
 sampler2D _MainTex;
 
 UNITY_INSTANCING_CBUFFER_START(Fading)
-	UNITY_DEFINE_INSTANCED_PROP(half, master_LODFadeFull)
+	// UNITY_DEFINE_INSTANCED_PROP(half, master_LODFadeFull)
 	UNITY_DEFINE_INSTANCED_PROP(half, master_LODFadeDetail)
 UNITY_INSTANCING_CBUFFER_END
 
@@ -60,6 +61,9 @@ UNITY_INSTANCING_CBUFFER_END
 
 fixed4 _Color;
 
+#define LOD_TRANZITION_THRESHOLD 3.0
+float _TreeSystemDistance;
+
 // Vertex processing
 
 void SpeedTreeVert(inout SpeedTreeVB IN, out Input OUT)
@@ -69,6 +73,20 @@ void SpeedTreeVert(inout SpeedTreeVB IN, out Input OUT)
 	OUT.mainTexUV = IN.texcoord.xy;
 	OUT.color = _Color;
 	OUT.color.rgb *= IN.color.r; // ambient occlusion factor
+	
+	float3 campos = _WorldSpaceCameraPos;
+	float3 pos = float3(unity_ObjectToWorld[0].w, unity_ObjectToWorld[1].w, unity_ObjectToWorld[2].w);
+
+	float dist = distance(pos, campos);
+
+	if (dist > _TreeSystemDistance - LOD_TRANZITION_THRESHOLD)
+	{
+		OUT.transparency = (_TreeSystemDistance - dist) / LOD_TRANZITION_THRESHOLD;
+	}
+	else
+	{
+		OUT.transparency = 1;
+	}
 
 	#ifdef EFFECT_HUE_VARIATION
 		float hueVariationAmount = frac(unity_ObjectToWorld[0].w + unity_ObjectToWorld[1].w + unity_ObjectToWorld[2].w);
@@ -119,8 +137,8 @@ void SpeedTreeFrag(Input IN, out SpeedTreeFragOut OUT)
 		clip(OUT.Alpha - _Cutoff);
 	#endif
 
+		
 	{
-		// Screen-door transparency: Discard pixel if below threshold.
 		const float4x4 thresholdMatrix =
 		{ 
 			1.0 / 17.0,  9.0 / 17.0,  3.0 / 17.0, 11.0 / 17.0,
@@ -130,10 +148,12 @@ void SpeedTreeFrag(Input IN, out SpeedTreeFragOut OUT)
 		};
 		const float4x4 _RowAccess = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 		float2 pos = IN.screenPos.xy / IN.screenPos.z;
-		pos *= _ScreenParams.xy; // pixel position
+		pos *= _ScreenParams.xy;
 
-		clip(UNITY_ACCESS_INSTANCED_PROP(master_LODFadeFull) - thresholdMatrix[fmod(pos.x, 4)] * _RowAccess[fmod(pos.y, 4)]);
+		// clip(UNITY_ACCESS_INSTANCED_PROP(master_LODFadeFull) - thresholdMatrix[fmod(pos.x, 4)] * _RowAccess[fmod(pos.y, 4)]);
+		clip(IN.transparency - thresholdMatrix[fmod(pos.x, 4)] * _RowAccess[fmod(pos.y, 4)]);
 	}
+	
 
 	#ifdef GEOM_TYPE_BRANCH_DETAIL
 		half4 detailColor = tex2D(_DetailTex, IN.Detail.xy);

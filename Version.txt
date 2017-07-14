@@ -1,6 +1,20 @@
+Version 0.9.3
+
+Fixes:
+
+- Fixed some issues with shadows appearing all over the place for unity 5.6+
+
+Features:
+
+- Optimized tree-billboard transition for better performance
+- Improved the readability of inspector variables and removed the ones that were not necessary
+- Added the possibility not to generate billboards for certain tree types
+- Added an extra class for extracting extra trees without the need to manually specify them
+
 Version 0.9.2 Beta
 
 Fixes:
+
 - Fixed trees dissapearing when using a custom camera in the inspector
 - Fixed not generatng colliders when the terrain was not centered
 
@@ -41,8 +55,3 @@ Research:
 - Adding support for non SpeedTree objects
 - Uneven terrain sizes like 3600x3900
 - Store/restore the trees from the managed terrains
-- Multiple scenes dynamically loaded that have trees as objects
-- Tree cascade distances for different max distances for different tree types. Groups should use different layers, different occlusion cameras, different distances
-- Hue variations for trees
-- Dynamically loading trees with 'Resources.Load'
-- Not force people have billboards on trees, but allow speedtrees without billboards

@@ -53,9 +53,7 @@ public class TreeSystemStructuredTrees
 
 [System.Serializable]
 public class TreeSystemLODData
-{
-    public bool m_IsBillboard;
-
+{    
     public float m_StartDistance;
     public float m_EndDistance;
 
@@ -68,10 +66,8 @@ public class TreeSystemLODData
     // END RUNTIME UPDATED DATA
 
     public void CopyBlock()
-    {
-        // If we are a 3D model, copy the wind data
-        if (m_IsBillboard == false)
-            m_TreeRenderer.GetPropertyBlock(m_Block);
+    {        
+        m_TreeRenderer.GetPropertyBlock(m_Block);
     }
 
     public bool IsInRange(float distance)
@@ -95,14 +91,11 @@ public class TreeSystemPrototypeData
     // Not using index any more, but hash so that we are sure that it is not lost upon any reorder
     public int m_TreePrototypeHash;
     public Vector3 m_Size; // Width, height, bottom. To be used by the tree system for each instance
-    public Material m_BillboardBatchMaterial; // Billboard material to be used for tree billboards
-    public Material m_BillboardMasterMaterial;
+    public Material m_BillboardBatchMaterial; // Billboard material to be used for tree billboards    
     public Vector2[] m_VertBillboardUVs;
     public Vector2[] m_HorzBillboardUVs;
 
-    // Maximum LOD level including billboard as index
-    public int m_MaxLodIndex;
-    // Maximum LOD level excluding billboard as index
+    // Maximum LOD level
     public int m_MaxLod3DIndex;
     // END DATA GENERATED
 
@@ -127,7 +120,11 @@ public struct TreeSystemLODInstance
 public class TreeSystemTerrain
 {
     public Terrain m_ManagedTerrain;    
+
     public Bounds m_ManagedTerrainBounds;
+    public Matrix4x4 m_ManagedTerrainLocalToWorld;
+    public Matrix4x4 m_ManagedTerrainWorldToLocal;
+    public Vector3 m_ManagedTerrainSizes;
 
     public int m_CellSize;
     public int m_CellCount;
@@ -144,15 +141,18 @@ public class TreeSystemTerrain
 
     // TODO: not used at the moment, modify after
     // Build at runtime, for very quick neighbor retrieval
-    public TreeSystemStructuredTrees[,] m_StructuredCells;
+    public TreeSystemStructuredTrees[,] m_CellsStructured;
 }
 
 [System.Serializable]
 public class TreeSystemSettings
 {
+    [Header("Optimization")]
+
+    [Tooltip("Must be between range [0...CELL_SIZE]")]
     [Range(0, 2000f)]
     public float m_MaxTreeDistance = 300;
-
+    
     [Space(20)]
     [Header("Shadow")]
 
@@ -182,12 +182,13 @@ public class TreeSystemSettings
     public string m_UsedLayer = "Default";
     [Tooltip("Defaults to 'Camera.main' for occlsion culling")]
     public Camera m_UsedCamera;
-    [Tooltip("If we should use geometry instancing")]
-    public bool m_UseInstancing = true;
 
-    // 5 meters when we're fading between LOD levels
-    public float m_LODTranzitionThreshold = 5.0f;
-    public float m_LODFadeSpeed = 5.0f;
+    [Tooltip("If the trees dissapear disable this")]
+    public bool m_UseOcclusion = false;
+
+    // Hard-coded, no reason to clutter people with extra data
+    public readonly float m_LODTranzitionThreshold = 5.0f;
+    public readonly float m_LODFadeSpeed = 5.0f;
 }
 
 #if UNITY_EDITOR
@@ -225,10 +226,7 @@ public class TreeSystem : MonoBehaviour
 
     // Data to add
     public TreeSystemSettings m_Settings = new TreeSystemSettings();
-    
-    public Shader m_ShaderTreeMaster;
-    public Shader m_ShaderBillboardMaster;
-    
+        
     // Shader used data
     private int m_ShaderIDFadeBillboard;
     private int m_ShaderIDFadeLODFull;
@@ -280,7 +278,9 @@ public class TreeSystem : MonoBehaviour
     }
 
     private void UpdateLODDataDistances(TreeSystemPrototypeData data)
-    {        
+    {
+        float lodMultiplier = 1;
+
         LOD[] lods = data.m_TreePrototype.GetComponent<LODGroup>().GetLODs();
         TreeSystemLODData[] lodData = data.m_LODData;
 
@@ -292,25 +292,37 @@ public class TreeSystem : MonoBehaviour
 
             TreeSystemLODData d = lodData[i];
 
+            LOD lodCrt = new LOD();
+            LOD lodPrv = new LOD();
+
+            lodCrt = lods[i];
+            lodCrt.screenRelativeTransitionHeight *= lodMultiplier;
+
+            if (i > 0)
+            {
+                lodPrv = lods[i - 1];
+                lodPrv.screenRelativeTransitionHeight *= lodMultiplier;
+            }
+
             if (i == 0)
             {
                 // If it's first 3D LOD
                 d.m_StartDistance = 0;
-                d.m_EndDistance = ((1.0f - lods[i].screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
+                d.m_EndDistance = ((1.0f - lodCrt.screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
             }
             else if (i == lodData.Length - 2)
             {
                 // If it's last 3D LOD
-                d.m_StartDistance = ((1.0f - lods[i - 1].screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
+                d.m_StartDistance = ((1.0f - lodPrv.screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
                 d.m_EndDistance = m_Settings.m_MaxTreeDistance;
             }
             else
             {
                 // If it's a LOD in between
-                d.m_StartDistance = ((1.0f - lods[i - 1].screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
-                d.m_EndDistance = ((1.0f - lods[i].screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
+                d.m_StartDistance = ((1.0f - lodPrv.screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
+                d.m_EndDistance = ((1.0f - lodCrt.screenRelativeTransitionHeight) * m_Settings.m_MaxTreeDistance);
             }
-        }        
+        }
     }
 
     private void GenerateRuntimePrototypeData(TreeSystemPrototypeData data)
@@ -320,11 +332,8 @@ public class TreeSystem : MonoBehaviour
         TreeSystemLODData[] lodData = data.m_LODData;        
 
         // Set material's UV at runtime
-        SetMaterialBillProps(data, data.m_BillboardBatchMaterial);
-        SetMaterialBillProps(data, data.m_BillboardMasterMaterial);
-
-        // TODO: don't instantiate ALL the LODS, but only the last 3D lod, we don't need so many obects
-
+        SetMaterialBillProps(data, data.m_BillboardBatchMaterial);        
+        
         // Instantiate the last 3D lod
         GameObject weirdTree = Instantiate(lods[lods.Length - 2].renderers[0].gameObject);
         // weirdTree.hideFlags = HideFlags.HideAndDontSave;
@@ -387,6 +396,10 @@ public class TreeSystem : MonoBehaviour
     {
         if (distance != m_Settings.m_MaxTreeDistance)
         {
+            // So that we're sure that we don't have more shadow than the distance
+            if (distance < m_Settings.m_ShadowDrawDistance)
+                m_Settings.m_ShadowDrawDistance = distance;
+
             Shader.SetGlobalFloat("_TreeSystemDistance", distance);
 
             m_Settings.m_MaxTreeDistance = distance;
@@ -458,7 +471,23 @@ public class TreeSystem : MonoBehaviour
         m_ShaderIDFadeBillboard = Shader.PropertyToID("master_LODFade");
 
         m_ShaderIDBillboardScaleRotation = Shader.PropertyToID("_InstanceScaleRotation");
-        
+
+        // We need matrices as 'indentity'
+        m_MtxLODTemp_0 = new Matrix4x4[MAX_BATCH];
+        m_MtxLODTemp_1 = new Matrix4x4[MAX_BATCH];
+        m_MtxLODTemp_2 = new Matrix4x4[MAX_BATCH];
+        m_MtxLODTemp_3 = new Matrix4x4[MAX_BATCH];
+        m_MtxLODTemp_4 = new Matrix4x4[MAX_BATCH];
+
+        for (int i = 0; i < MAX_BATCH; i++)
+        {
+            m_MtxLODTemp_0[i] = Matrix4x4.identity;
+            m_MtxLODTemp_1[i] = Matrix4x4.identity;
+            m_MtxLODTemp_2[i] = Matrix4x4.identity;
+            m_MtxLODTemp_3[i] = Matrix4x4.identity;
+            m_MtxLODTemp_4[i] = Matrix4x4.identity;
+        }
+
         // Generate runtime data
         for (int i = 0; i < m_ManagedPrototypes.Length; i++)
             GenerateRuntimePrototypeData(m_ManagedPrototypes[i]);
@@ -501,6 +530,8 @@ public class TreeSystem : MonoBehaviour
             if(terrain.m_ManagedTerrain != null)
                 terrain.m_ManagedTerrain.drawTreesAndFoliage = false;
 
+            terrain.m_CellsStructured = new TreeSystemStructuredTrees[terrain.m_CellCount, terrain.m_CellCount];
+
             CullingGroup cullingGroup = new CullingGroup();
 
             BoundingSphere[] bounds = new BoundingSphere[terrain.m_Cells.Length];
@@ -514,6 +545,10 @@ public class TreeSystem : MonoBehaviour
 
                 // Create the culling group data
                 bounds[j] = new BoundingSphere(terrain.m_Cells[j].m_BoundsSphere.m_CenterRadius);
+
+                // Structure cell data
+                RowCol pos = terrain.m_Cells[j].m_Position;
+                terrain.m_CellsStructured[pos.m_Row, pos.m_Col] = terrain.m_Cells[j];
             }
 
             if (!m_Settings.m_UsedCamera)
@@ -572,8 +607,7 @@ public class TreeSystem : MonoBehaviour
             for (int i = 0; i < lod.Length; i++)
                 lod[i].CopyBlock();
         }
-
-        float x, y, z;
+        
         float treeDistSqr = m_Settings.m_MaxTreeDistance * m_Settings.m_MaxTreeDistance;
         float shadowDistSqr = m_Settings.m_ShadowDrawDistance * m_Settings.m_ShadowDrawDistance;
 
@@ -582,6 +616,8 @@ public class TreeSystem : MonoBehaviour
             TreeSystemTerrain terrain = m_ManagedTerrains[i];
 
             // Get closest point
+
+            /*
             Vector3 pt = terrain.m_ManagedTerrainBounds.ClosestPoint(m_CameraPosTemp);
 
             // Check if terrain is within reach range
@@ -590,9 +626,12 @@ public class TreeSystem : MonoBehaviour
             z = pt.z - m_CameraPosTemp.z;
 
             float distToTerrain = x * x + y * y + z * z;
+            */
+
+            float distToTerrain = terrain.m_ManagedTerrainBounds.SqrDistance(m_CameraPosTemp);
 
             // Enable/disable culling group execution based on terrain distance, since we don't want all of them running around
-            if(distToTerrain < treeDistSqr)
+            if (distToTerrain < treeDistSqr)
             {
                 if (terrain.m_CullingGroup.enabled == false)
                     terrain.m_CullingGroup.enabled = true;
@@ -606,15 +645,36 @@ public class TreeSystem : MonoBehaviour
                 if(terrain.m_CullingGroup.enabled)
                     terrain.m_CullingGroup.enabled = false;
             }
-        }                 
+        }
+
+#if UNITY_EDITOR
+        
+#endif
     }
 
-    private void ProcessTerrain(TreeSystemTerrain terrain, ref float treeDistSqr, ref float shadowDistSqr)
-    {                        
-        TreeSystemStructuredTrees[] cells = terrain.m_Cells;
-        CullingGroup culling = terrain.m_CullingGroup;
+    private List<TreeSystemStructuredTrees> m_TempNeighbors = new List<TreeSystemStructuredTrees>();
 
-        float x, y, z;
+    private void ProcessTerrain(TreeSystemTerrain terrain, ref float treeDistSqr, ref float shadowDistSqr)
+    {
+        // Get only the visible cells around the player
+        int cellsCount = terrain.m_CellCount;
+        Vector3 terrainLocal = terrain.m_ManagedTerrainWorldToLocal.MultiplyPoint3x4(m_CameraPosTemp);
+        Vector3 terrSize = terrain.m_ManagedTerrainSizes;
+
+        RowCol gridPos;
+
+        GetTerrainGridIndex(out gridPos, terrainLocal, cellsCount, terrSize);
+
+        // Get neighbors
+        GetNeightbors(m_TempNeighbors, gridPos.m_Row, gridPos.m_Col, terrain.m_CellsStructured, ref cellsCount);
+
+        if (m_TempNeighbors.Count <= 0)
+            return;
+        
+        CullingGroup culling = terrain.m_CullingGroup;
+        bool useOcclusion = m_Settings.m_UseOcclusion;
+
+        // float x, y, z;
 
         // TODO: calculate based on bounds index the cells that we'll iterate like the grass system
         // We won't require to iterate all the cells but the neighbors of the current cell only
@@ -622,17 +682,19 @@ public class TreeSystem : MonoBehaviour
         // TODO: only get the data from the culling group API at the moment
 
         // Go bounds by bounds
-        for (int cellIdx = 0; cellIdx < cells.Length; cellIdx++)
+        for (int cellIdx = 0; cellIdx < m_TempNeighbors.Count; cellIdx++)
         {
-            TreeSystemStructuredTrees cell = cells[cellIdx];
+            TreeSystemStructuredTrees cell = m_TempNeighbors[cellIdx];
 
             // If we don't have any tree skip this cell
             if (cell.m_Instances.Length <= 0) continue;
 
             // And also check if the bounds are visible
-            if (culling.IsVisible(cellIdx) == false) continue;
+            if (useOcclusion && culling.IsVisible(cellIdx) == false) continue;
 
             // Get closest point to cell
+
+            /*
             Vector3 pt = cell.m_BoundsBox.ClosestPoint(m_CameraPosTemp);
 
             x = pt.x - m_CameraPosTemp.x;
@@ -640,7 +702,10 @@ public class TreeSystem : MonoBehaviour
             z = pt.z - m_CameraPosTemp.z;
 
             float distToCell = x * x + y * y + z * z;
-            
+            */
+
+            float distToCell = cell.m_BoundsBox.SqrDistance(m_CameraPosTemp);
+
             if (distToCell < treeDistSqr && GeometryUtility.TestPlanesAABB(m_PlanesTemp, cell.m_BoundsBox))
             {
                 // TODO: the same process when we are going to have terrain sub-cells                               
@@ -680,8 +745,7 @@ public class TreeSystem : MonoBehaviour
         int currentShadowHash = shadowHash;
 
         for (int treeIndex = 0; treeIndex < treeInstances.Length; treeIndex++)
-        {
-            // 1.33 ms for 110k trees
+        {            
             // This is an order of magnitude faster than (treeInstances[treeIndex].m_WorldPosition - pos).sqrMagnitude
             // since it does not initiate with a ctor an extra vector during the computation
             x = treeInstances[treeIndex].m_WorldPosition.x - m_CameraPosTemp.x;
@@ -689,10 +753,7 @@ public class TreeSystem : MonoBehaviour
             z = treeInstances[treeIndex].m_WorldPosition.z - m_CameraPosTemp.z;
 
             float distToTree = x * x + y * y + z * z;
-
-            // 17 ms for 110k trees
-            // float distToTree = (treeInstances[treeIndex].m_WorldPosition - pos).sqrMagnitude;
-
+            
             if (insideFrustum)
             {
                 // If we are completely inside the frustum we don't need to check each individual tree's bounds
@@ -791,11 +852,11 @@ public class TreeSystem : MonoBehaviour
 
     // 'MAX_LOD_COUNT' is the maximum possible count of LOD levels. Modify based on the tree with the highest LOD value.
     // If we have a tree with 8 LODS manually add values until 7 (m_MtxLODTemp_5, m_MtxLODTemp_6, ... m_MtxLODTemp_7) and follow the example
-    private Matrix4x4[] m_MtxLODTemp_0 = new Matrix4x4[MAX_BATCH];
-    private Matrix4x4[] m_MtxLODTemp_1 = new Matrix4x4[MAX_BATCH];
-    private Matrix4x4[] m_MtxLODTemp_2 = new Matrix4x4[MAX_BATCH];
-    private Matrix4x4[] m_MtxLODTemp_3 = new Matrix4x4[MAX_BATCH];
-    private Matrix4x4[] m_MtxLODTemp_4 = new Matrix4x4[MAX_BATCH];
+    private Matrix4x4[] m_MtxLODTemp_0;
+    private Matrix4x4[] m_MtxLODTemp_1;
+    private Matrix4x4[] m_MtxLODTemp_2;
+    private Matrix4x4[] m_MtxLODTemp_3;
+    private Matrix4x4[] m_MtxLODTemp_4;
 
     private float[] m_MtxLODTranzDetail_0 = new float[MAX_BATCH];
     private float[] m_MtxLODTranzDetail_1 = new float[MAX_BATCH];
@@ -824,94 +885,133 @@ public class TreeSystem : MonoBehaviour
 
         int maxLod3D = data.m_MaxLod3DIndex;
 
-        // Process LOD so that we know what to batch
-        for(int i = 0; i < count; i++)
+        // Build the batched stuff. We want to batch the same LOD and draw them using instancing
+        for (int i = 0; i < count; i++)
         {
             ProcessLOD(ref lodData, ref maxLod3D, ref lodInstanceData[indices[i]], ref dist[i]);
+
+            int idx = indices[i];
+            int currentLODLevel = lodInstanceData[idx].m_LODLevel;
+
+            // Collect that LOD level
+            if (currentLODLevel == 0)
+            {
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m00 = treeInstances[idx].m_PositionMtx.m00;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m01 = treeInstances[idx].m_PositionMtx.m01;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m02 = treeInstances[idx].m_PositionMtx.m02;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m03 = treeInstances[idx].m_PositionMtx.m03;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m10 = treeInstances[idx].m_PositionMtx.m10;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m11 = treeInstances[idx].m_PositionMtx.m11;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m12 = treeInstances[idx].m_PositionMtx.m12;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m13 = treeInstances[idx].m_PositionMtx.m13;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m20 = treeInstances[idx].m_PositionMtx.m20;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m21 = treeInstances[idx].m_PositionMtx.m21;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m22 = treeInstances[idx].m_PositionMtx.m22;
+                m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]].m23 = treeInstances[idx].m_PositionMtx.m23;                
+
+                m_MtxLODTranzDetail_0[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
+                m_MtxLODTranzFull_0[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
+            }
+            else if (currentLODLevel == 1)
+            {
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m00 = treeInstances[idx].m_PositionMtx.m00;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m01 = treeInstances[idx].m_PositionMtx.m01;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m02 = treeInstances[idx].m_PositionMtx.m02;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m03 = treeInstances[idx].m_PositionMtx.m03;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m10 = treeInstances[idx].m_PositionMtx.m10;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m11 = treeInstances[idx].m_PositionMtx.m11;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m12 = treeInstances[idx].m_PositionMtx.m12;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m13 = treeInstances[idx].m_PositionMtx.m13;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m20 = treeInstances[idx].m_PositionMtx.m20;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m21 = treeInstances[idx].m_PositionMtx.m21;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m22 = treeInstances[idx].m_PositionMtx.m22;
+                m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]].m23 = treeInstances[idx].m_PositionMtx.m23;                
+
+                m_MtxLODTranzDetail_1[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
+                m_MtxLODTranzFull_1[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
+            }
+            else if (currentLODLevel == 2)
+            {
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m00 = treeInstances[idx].m_PositionMtx.m00;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m01 = treeInstances[idx].m_PositionMtx.m01;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m02 = treeInstances[idx].m_PositionMtx.m02;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m03 = treeInstances[idx].m_PositionMtx.m03;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m10 = treeInstances[idx].m_PositionMtx.m10;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m11 = treeInstances[idx].m_PositionMtx.m11;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m12 = treeInstances[idx].m_PositionMtx.m12;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m13 = treeInstances[idx].m_PositionMtx.m13;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m20 = treeInstances[idx].m_PositionMtx.m20;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m21 = treeInstances[idx].m_PositionMtx.m21;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m22 = treeInstances[idx].m_PositionMtx.m22;
+                m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]].m23 = treeInstances[idx].m_PositionMtx.m23;
+                
+                m_MtxLODTranzDetail_2[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
+                m_MtxLODTranzFull_2[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
+
+            }
+            else if (currentLODLevel == 3)
+            {
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m00 = treeInstances[idx].m_PositionMtx.m00;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m01 = treeInstances[idx].m_PositionMtx.m01;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m02 = treeInstances[idx].m_PositionMtx.m02;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m03 = treeInstances[idx].m_PositionMtx.m03;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m10 = treeInstances[idx].m_PositionMtx.m10;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m11 = treeInstances[idx].m_PositionMtx.m11;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m12 = treeInstances[idx].m_PositionMtx.m12;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m13 = treeInstances[idx].m_PositionMtx.m13;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m20 = treeInstances[idx].m_PositionMtx.m20;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m21 = treeInstances[idx].m_PositionMtx.m21;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m22 = treeInstances[idx].m_PositionMtx.m22;
+                m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]].m23 = treeInstances[idx].m_PositionMtx.m23;
+                
+                m_MtxLODTranzDetail_3[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
+                m_MtxLODTranzFull_3[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
+
+            }
+            else if (currentLODLevel == 4)
+            {
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m00 = treeInstances[idx].m_PositionMtx.m00;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m01 = treeInstances[idx].m_PositionMtx.m01;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m02 = treeInstances[idx].m_PositionMtx.m02;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m03 = treeInstances[idx].m_PositionMtx.m03;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m10 = treeInstances[idx].m_PositionMtx.m10;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m11 = treeInstances[idx].m_PositionMtx.m11;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m12 = treeInstances[idx].m_PositionMtx.m12;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m13 = treeInstances[idx].m_PositionMtx.m13;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m20 = treeInstances[idx].m_PositionMtx.m20;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m21 = treeInstances[idx].m_PositionMtx.m21;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m22 = treeInstances[idx].m_PositionMtx.m22;
+                m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]].m23 = treeInstances[idx].m_PositionMtx.m23;
+                
+                m_MtxLODTranzDetail_4[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
+                m_MtxLODTranzFull_4[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
+            }
+
+            m_MtxLODTempCount[currentLODLevel]++;
         }
 
-        if (m_Settings.m_UseInstancing)
+        // Now that the data is built, issue it
+        for (int i = 0; i <= maxLod3D; i++)
         {
-            // Build the batched stuff. We want to batch the same LOD and draw them using instancing
-            for (int i = 0; i < count; i++)
-            {
-                int idx = indices[i];
-                int currentLODLevel = lodInstanceData[idx].m_LODLevel;
-
-                // Collect that LOD level
-                if (currentLODLevel == 0)
-                {
-                    m_MtxLODTemp_0[m_MtxLODTempCount[currentLODLevel]] = treeInstances[idx].m_PositionMtx;
-                    m_MtxLODTranzDetail_0[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
-                    m_MtxLODTranzFull_0[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
-                }
-                else if (currentLODLevel == 1)
-                {
-                    m_MtxLODTemp_1[m_MtxLODTempCount[currentLODLevel]] = treeInstances[idx].m_PositionMtx;
-                    m_MtxLODTranzDetail_1[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
-                    m_MtxLODTranzFull_1[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
-                }
-                else if (currentLODLevel == 2)
-                {
-                    m_MtxLODTemp_2[m_MtxLODTempCount[currentLODLevel]] = treeInstances[idx].m_PositionMtx;
-                    m_MtxLODTranzDetail_2[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
-                    m_MtxLODTranzFull_2[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
-
-                }
-                else if (currentLODLevel == 3)
-                {
-                    m_MtxLODTemp_3[m_MtxLODTempCount[currentLODLevel]] = treeInstances[idx].m_PositionMtx;
-                    m_MtxLODTranzDetail_3[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
-                    m_MtxLODTranzFull_3[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
-
-                }
-                else if (currentLODLevel == 4)
-                {
-                    m_MtxLODTemp_4[m_MtxLODTempCount[currentLODLevel]] = treeInstances[idx].m_PositionMtx;
-                    m_MtxLODTranzDetail_4[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODTransition;
-                    m_MtxLODTranzFull_4[m_MtxLODTempCount[currentLODLevel]] = lodInstanceData[idx].m_LODFullFade;
-                }
-
-                m_MtxLODTempCount[currentLODLevel]++;
-
-                // We don't instantiate the trees that are in a transition since they should be an exception
-                if (currentLODLevel == maxLod3D && lodInstanceData[idx].m_LODFullFade < 1)
-                    DrawBillboardLOD(ref lodData[currentLODLevel + 1], ref lodInstanceData[idx], ref treeInstances[idx]);
-            }
-            
-            // Now that the data is built, issue it
-            for (int i = 0; i <= maxLod3D; i++)
-            {
-                if(i == 0)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_0, ref m_MtxLODTranzDetail_0, ref m_MtxLODTranzFull_0, ref m_MtxLODTempCount[i], ref shadowsOnly);
-                else if(i == 1)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_1, ref m_MtxLODTranzDetail_1, ref m_MtxLODTranzFull_1, ref m_MtxLODTempCount[i], ref shadowsOnly);
-                else if (i == 2)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_2, ref m_MtxLODTranzDetail_2, ref m_MtxLODTranzFull_2, ref m_MtxLODTempCount[i], ref shadowsOnly);
-                else if (i == 3)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_3, ref m_MtxLODTranzDetail_3, ref m_MtxLODTranzFull_3, ref m_MtxLODTempCount[i], ref shadowsOnly);
-                else if (i == 4)
-                    Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_4, ref m_MtxLODTranzDetail_4, ref m_MtxLODTranzFull_4, ref m_MtxLODTempCount[i], ref shadowsOnly);
-            }
-        }
-        else
-        {
-            // Draw the processed lod
-            for (int i = 0; i < count; i++)
-            {
-                int idx = indices[i];
-                DrawProcessedLOD(ref lodData, ref maxLod3D, ref lodInstanceData[idx], ref treeInstances[idx], ref shadowsOnly);
-            }
+            if (i == 0)
+                Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_0, ref m_MtxLODTranzDetail_0, ref m_MtxLODTranzFull_0, ref m_MtxLODTempCount[i], ref shadowsOnly);
+            else if (i == 1)
+                Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_1, ref m_MtxLODTranzDetail_1, ref m_MtxLODTranzFull_1, ref m_MtxLODTempCount[i], ref shadowsOnly);
+            else if (i == 2)
+                Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_2, ref m_MtxLODTranzDetail_2, ref m_MtxLODTranzFull_2, ref m_MtxLODTempCount[i], ref shadowsOnly);
+            else if (i == 3)
+                Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_3, ref m_MtxLODTranzDetail_3, ref m_MtxLODTranzFull_3, ref m_MtxLODTempCount[i], ref shadowsOnly);
+            else if (i == 4)
+                Draw3DLODInstanced(ref lodData[i], ref m_MtxLODTemp_4, ref m_MtxLODTranzDetail_4, ref m_MtxLODTranzFull_4, ref m_MtxLODTempCount[i], ref shadowsOnly);
         }
     }
-
 
     /**
      * Must be called only if the camera distance is smaller than the maximum tree view distance.
      */
     private void ProcessLOD(ref TreeSystemLODData[] data, ref int max3DLOD, ref TreeSystemLODInstance inst, ref float cameraDistance)
-    {
-        if (cameraDistance < m_Settings.m_MaxTreeDistance - m_Settings.m_LODTranzitionThreshold)
+    {        
+        if (cameraDistance <= m_Settings.m_MaxTreeDistance + m_Settings.m_LODTranzitionThreshold)
         {
             for (int i = 0; i < data.Length - 1; i++)
             {
@@ -927,7 +1027,8 @@ public class TreeSystem : MonoBehaviour
                     break;
                 }
             }
-
+            
+            
             if (inst.m_LODLevel == max3DLOD && inst.m_LODFullFade < 1)
             {
                 // If we are the last 3D lod then we animate nicely
@@ -937,13 +1038,17 @@ public class TreeSystem : MonoBehaviour
             {
                 // If we are not the lost LOD level simply set the value to 1
                 inst.m_LODFullFade = 1f;
-            }
+            } 
+                    
         }
+
+        
         else
         {
             inst.m_LODLevel = max3DLOD;
             if (inst.m_LODFullFade > 0) inst.m_LODFullFade -= Time.deltaTime * m_Settings.m_LODFadeSpeed;
         }
+        
     }
 
     // Draw and process routines
@@ -952,13 +1057,7 @@ public class TreeSystem : MonoBehaviour
         int lod = lodInst.m_LODLevel;
 
         // Draw the stuff with the material specific for each LOD
-        Draw3DLOD(ref data[lod], ref lodInst, ref inst, ref shadowsOnly);
-
-        if (lod == maxLod3D && lodInst.m_LODFullFade < 1)
-        {
-            // Since we only need for the last 3D lod the calculations...
-            DrawBillboardLOD(ref data[lod + 1], ref lodInst, ref inst);
-        }
+        Draw3DLOD(ref data[lod], ref lodInst, ref inst, ref shadowsOnly);        
     }
     
     public void Draw3DLODInstanced(ref TreeSystemLODData data, ref Matrix4x4[] positions, ref float[] lodDetail, ref float[] lodFull, ref int count, ref bool shadowsOnly)
@@ -966,7 +1065,9 @@ public class TreeSystem : MonoBehaviour
         if (count > 0)
         {
             data.m_Block.SetFloatArray(m_ShaderIDFadeLODDetail, lodDetail);
-            data.m_Block.SetFloatArray(m_ShaderIDFadeLODFull, lodFull);
+
+            // Removed at the moment
+            // data.m_Block.SetFloatArray(m_ShaderIDFadeLODFull, lodFull);
 
             for (int mat = 0; mat < data.m_Materials.Length; mat++)
             {
@@ -996,31 +1097,36 @@ public class TreeSystem : MonoBehaviour
 
             m_DataIssuesDrawCalls++;
         }
+    }    
+
+    public static void GetTerrainGridIndex(out RowCol position, Vector3 localTerrain, int cellCount, Vector3 terrainSizes)
+    {
+        position.m_Row = Mathf.FloorToInt((localTerrain.x / terrainSizes.x) * cellCount);
+        position.m_Col = Mathf.FloorToInt((localTerrain.z / terrainSizes.z) * cellCount);
     }
 
-    private Matrix4x4 m_BillboardTempPos = Matrix4x4.identity;
-
-    public void DrawBillboardLOD(ref TreeSystemLODData data, ref TreeSystemLODInstance lodInst, ref TreeSystemStoredInstance inst)
+    void GetNeightbors(List<TreeSystemStructuredTrees> neighbors, int row, int column, TreeSystemStructuredTrees[,] cells, ref int cellCount)
     {
-        data.m_Block.SetVector(m_ShaderIDFadeBillboard, new Vector4(lodInst.m_LODTransition, 1.0f - lodInst.m_LODFullFade, 0, 0));
+        if (neighbors.Count > 0)
+            neighbors.Clear();
 
-        // Set extra scale and stuff
-        Vector4 extra = inst.m_WorldScale;
-        extra.w = inst.m_WorldRotation;
+        // Depth of 1, that is maximum 1 cell around us
+        const int depth = 1;
 
-        // Set positions used in shader
-        data.m_Block.SetVector(m_ShaderIDBillboardScaleRotation, extra);        
-
-        m_BillboardTempPos.m03 = inst.m_WorldPosition.x;
-        m_BillboardTempPos.m13 = inst.m_WorldPosition.y;
-        m_BillboardTempPos.m23 = inst.m_WorldPosition.z;
-
-        for (int mat = 0; mat < data.m_Materials.Length; mat++)
+        for (int r = -depth; r <= depth; r++)
         {
-            Graphics.DrawMesh(data.m_Mesh, m_BillboardTempPos, data.m_Materials[mat], m_UsedLayerId, m_Settings.m_UsedCamera, mat, data.m_Block, true, true);
-            m_DataIssuesDrawCalls++;
+            for (int c = -depth; c <= depth; c++)
+            {
+                if (ValidIndex(row + r, column + c, ref cellCount))
+                    neighbors.Add(cells[row + r, column + c]);
+            }
         }
-    }       
+    }
+
+    bool ValidIndex(int row, int column, ref int cells)
+    {
+        return row >= 0 && row < cells && column >= 0 && column < cells;
+    }
 
     public string GetDrawInfo()
     {
@@ -1031,7 +1137,6 @@ public class TreeSystem : MonoBehaviour
             "\nIssued shadow trees: " + m_DataIssuedShadows + 
             "\nIssued draw calls: " + m_DataIssuesDrawCalls + 
             "\nIssued active colliders: " + m_DataIssuedActiveColliders +
-            "\nUse instancing: " + m_Settings.m_UseInstancing + 
             "\nUse colliders: " + m_Settings.m_ApplyTreeColliders +
             "\nUse shadow correction: " + m_Settings.m_ApplyShadowPoppingCorrection;
     }

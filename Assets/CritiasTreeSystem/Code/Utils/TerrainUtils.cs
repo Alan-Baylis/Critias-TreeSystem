@@ -556,22 +556,18 @@ public class TerrainUtils : MonoBehaviour
      * 
      * @return False in case there is no collision and true if there is a collision
      */
-    public static bool TreeHashCheck(Terrain mainTerrain)
+    public static bool TreeHashCheck(string[] prefabNames)
     {
         HashSet<int> set = new HashSet<int>();
         
-        TreePrototype[] p = mainTerrain.terrainData.treePrototypes;
-
-        for(int i = 0; i < p.Length; i++)
+        foreach(string prefab in prefabNames)
         {
-            if(set.Contains(TUtils.GetStableHashCode(p[i].prefab.name)))
-            {
+            if (set.Contains(TUtils.GetStableHashCode(prefab)))
                 return true;
-            }
 
-            set.Add(TUtils.GetStableHashCode(p[i].prefab.name));
+            set.Add(TUtils.GetStableHashCode(prefab));
         }
-
+        
         return false;
     }
 
