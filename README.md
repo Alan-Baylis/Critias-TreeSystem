@@ -1,7 +1,5 @@
 Critias Tree System
 
-Would you like to see how it looks in a real game? Check out ['The Unwritten Critias'](http://www.unwrittencritias.com), our upcoming game.
-
 ![alt tag](https://github.com/AssemblyJohn/Critias-TreeSystem/blob/master/CritiasTree.png)
 
 The Critias tree system is an Unity addition that is used for an, currently in-development, open-world quest named 'The Unwritten Critias'. It was developed due to the poor
